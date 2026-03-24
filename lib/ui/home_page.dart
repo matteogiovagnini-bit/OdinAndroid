@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:nfc_manager/nfc_manager_android.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:nfc_manager/nfc_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+import 'package:sensors_plus/sensors_plus.dart';
+import 'dart:math';
 
 import '../services/assistant_service.dart';
 import '../services/tts_service.dart';
@@ -30,6 +34,12 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late final VoiceAssistantController _controller;
 
+  StreamSubscription<AccelerometerEvent>? _accSub;
+
+  double _pitch = 0;
+  double _roll = 0;
+  String _orientationLabel = "N/A";
+
   StreamSubscription<String>? _statusSub;
   StreamSubscription<String>? _partialSub;
   StreamSubscription<String>? _finalSub;
@@ -47,6 +57,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   bool _nfcSessionRunning = false;
   bool _nfcUnlocking = false;
+
+  bool _isPhoneHorizontal() {
+    return _orientationLabel == 'DESTRA' || _orientationLabel == 'SINISTRA';
+  }
+
+  Future<void> _lockLandscapeMode() async {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
+
+  Future<void> _unlockAllOrientations() async {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
 
   @override
   void initState() {
@@ -104,7 +134,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       _updateAnimationsForState(value);
     });
-
+    
+    _startOrientation();
     _startNfcGateMode();
   }
 
@@ -295,6 +326,43 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       .trim();
   }
 
+  void _startOrientation() {
+    _accSub?.cancel();
+
+    _accSub = accelerometerEvents.listen((event) {
+      final x = event.x;
+      final y = event.y;
+      final z = event.z;
+
+      final pitch = atan2(-x, sqrt(y * y + z * z)) * 180 / pi;
+      final roll = atan2(y, z) * 180 / pi;
+
+      String orientation;
+
+      if (roll > 55 || roll < -55) {
+        orientation = roll > 0 ? "DESTRA" : "SINISTRA";
+      } else if (pitch > 55) {
+        orientation = "VERTICALE";
+      } else if (pitch < -55) {
+        orientation = "CAPOVOLTO";
+      } else {
+        orientation = "PIATTO";
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        _pitch = pitch;
+        _roll = roll;
+        _orientationLabel = orientation;
+      });
+    });
+  }
+
+  void _stopOrientation() {
+    _accSub?.cancel();
+  }
+
   Future<void> _startAssistant() async {
     try {
       if (!mounted) return;
@@ -302,7 +370,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         _nfcStatus = 'NFC sbloccato';
       });
 
+      await _lockLandscapeMode();
       await _controller.start();
+//      _startOrientation();
       await _controller.ttsService.speak("Sistema attivato");
 
     } catch (e, st) {
@@ -321,6 +391,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Future<void> _stopAssistant() async {
     try {
       await _controller.stopAll();
+//      _stopOrientation();
+      await _unlockAllOrientations();
       await _startNfcGateMode();
     } catch (e, st) {
       debugPrint('ERRORE STOP ASSISTENTE: $e');
@@ -336,6 +408,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Future<void> _restartAssistant() async {
     try {
       await _controller.stopAll();
+      await _unlockAllOrientations();
       await Future.delayed(const Duration(milliseconds: 300));
       await _startNfcGateMode();
     } catch (e, st) {
@@ -421,6 +494,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _speakController.dispose();
     _listenController.dispose();
     _blinkController.dispose();
+    _accSub?.cancel();
+    _unlockAllOrientations();
     super.dispose();
   }
 
@@ -433,7 +508,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   Widget _buildVisualUi() {
-    final color = _stateColor();
+    final bool isHorizontal = _isPhoneHorizontal();
+
+//    final AssistantState visualState =
+//        isHorizontal ? _assistantState : AssistantState.stopped;
+
+    final AssistantState visualState =_assistantState;
+
+    final color = isHorizontal ? _stateColor() : Colors.white38;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -462,113 +544,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               ),
             ),
             Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  AnimatedBuilder(
-                    animation: Listenable.merge([
-                      _speakController,
-                      _listenController,
-                      _blinkController,
-                    ]),
-                    builder: (context, _) {
-                      return _EyesWidget(
-                        state: _assistantState,
-                        accent: color,
-                        speakValue: _speakController.value,
-                        listenValue: _listenController.value,
-                        blinkValue: _blinkController.value,
-                        diabolikStyle: kUseDiabolikStyle,
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 34),
-                  Text(
-                    _stateLabel(),
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 30,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 3,
+              child: AnimatedBuilder(
+                animation: Listenable.merge([
+                  _speakController,
+                  _listenController,
+                  _blinkController,
+                ]),
+                builder: (context, _) {
+                  return AnimatedOpacity(
+                    duration: const Duration(milliseconds: 180),
+                    opacity: 1,
+                    child: _EyesWidget(
+                      state: visualState,
+                      accent: color,
+                      speakValue: _speakController.value,
+                      listenValue: _listenController.value,
+                      blinkValue: _blinkController.value,
+                      diabolikStyle: kUseDiabolikStyle,
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Text(
-                      _stateHint(),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Text(
-                      _status,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Text(
-                      _nfcStatus,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white38,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 28),
-                  _VisualTranscriptCard(
-                    title: 'Parziale',
-                    value: _partialText,
-                  ),
-                  const SizedBox(height: 12),
-                  _VisualTranscriptCard(
-                    title: 'Finale',
-                    value: _finalText,
-                  ),
-                ],
-              ),
-            ),
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                alignment: WrapAlignment.center,
-                children: [
-                  _GlassButton(
-                    icon: Icons.nfc,
-                    label: 'Attiva NFC',
-                    enabled: _assistantState == AssistantState.stopped,
-                    onTap: _startNfcGateMode,
-                  ),
-                  _GlassButton(
-                    icon: Icons.stop,
-                    label: 'Ferma',
-                    enabled: _assistantState != AssistantState.stopped,
-                    onTap: _stopAssistant,
-                  ),
-                  _GlassButton(
-                    icon: Icons.refresh,
-                    label: 'Reset',
-                    enabled: true,
-                    onTap: _restartAssistant,
-                  ),
-                ],
+                  );
+                },
               ),
             ),
           ],
@@ -676,6 +671,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 value: _finalText.isEmpty ? '...' : _finalText,
                 icon: Icons.notes,
               ),
+              const SizedBox(height: 8),
+              _InfoCard(
+                title: 'Orientamento',
+                value: '$_orientationLabel\nPitch: ${_pitch.toStringAsFixed(1)} | Roll: ${_roll.toStringAsFixed(1)}',
+                icon: Icons.screen_rotation,
+              ),
               const SizedBox(height: 12),
               _InfoCard(
                 title: 'Suggerimento',
@@ -744,44 +745,47 @@ class _EyesWidget extends StatelessWidget {
 
     final double blinkScale = 1.0 - (blinkValue * 0.94);
 
-    double eyeHeight = 24;
-    double eyeWidth = 132;
+    double eyeHeight = 34;
+    double eyeWidth = 180;
     double pupilShift = 0;
-    double glow = 24;
+    double glow = 30;
     double tilt = 0.22;
     double breathing = 0.0;
+    double pupilVerticalShift = 0;
 
     Color eyeAccent = accent;
 
     if (isIdle) {
-      eyeHeight = 22;
-      eyeWidth = 136;
-      glow = 18;
+      eyeHeight = 30;
+      eyeWidth = 190;
+      glow = 24;
       tilt = 0.26;
       breathing = 0.5 + (listenValue * 0.5);
     } else if (isListening) {
-      eyeHeight = 30 + (listenValue * 5);
-      eyeWidth = 138;
-      pupilShift = (listenValue - 0.5) * 8;
-      glow = 28;
+      eyeHeight = 42 + (listenValue * 8);
+      eyeWidth = 198;
+      pupilShift = (listenValue - 0.5) * 14;
+      pupilVerticalShift = (listenValue - 0.5) * 2;
+      glow = 34;
       tilt = 0.22;
     } else if (isProcessing) {
-      eyeHeight = 16 + (listenValue * 3);
-      eyeWidth = 128;
-      glow = 20;
+      eyeHeight = 24 + (listenValue * 4);
+      eyeWidth = 182;
+      glow = 24;
       tilt = 0.30;
       eyeAccent = Colors.lightBlueAccent;
     } else if (isSpeaking) {
-      eyeHeight = 18 + (speakValue * 16);
-      eyeWidth = 144;
-      pupilShift = math.sin(speakValue * math.pi * 2) * 4;
-      glow = 34;
-      tilt = 0.18;
+      eyeHeight = 26 + (speakValue * 20);
+      eyeWidth = 208;
+      pupilShift = math.sin(speakValue * math.pi * 2) * 10;
+      pupilVerticalShift = math.cos(speakValue * math.pi * 4) * 3;
+      glow = 42;
+      tilt = 0.16;
       eyeAccent = Colors.redAccent;
     } else if (isStopped) {
-      eyeHeight = 8;
-      eyeWidth = 110;
-      glow = 8;
+      eyeHeight = 10;
+      eyeWidth = 150;
+      glow = 10;
       tilt = 0.32;
       eyeAccent = Colors.white38;
     }
@@ -792,7 +796,7 @@ class _EyesWidget extends StatelessWidget {
       children: [
         AnimatedContainer(
           duration: const Duration(milliseconds: 220),
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 26),
+          padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 34),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(32),
             color: Colors.white.withOpacity(0.015),
@@ -812,7 +816,7 @@ class _EyesWidget extends StatelessWidget {
             children: [
               AnimatedContainer(
                 duration: const Duration(milliseconds: 220),
-                width: 300 + (breathing * 4),
+                width: 420 + (breathing * 8),
                 height: 8,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(99),
@@ -829,25 +833,27 @@ class _EyesWidget extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _SingleEye(
-                    width: eyeWidth,
-                    height: eyeHeight,
-                    accent: eyeAccent,
-                    pupilShift: -pupilShift,
-                    glow: glow,
-                    tilt: tilt,
-                    diabolikStyle: diabolikStyle,
-                  ),
-                  const SizedBox(width: 20),
-                  _SingleEye(
-                    width: eyeWidth,
-                    height: eyeHeight,
-                    accent: eyeAccent,
-                    pupilShift: pupilShift,
-                    glow: glow,
-                    tilt: -tilt,
-                    diabolikStyle: diabolikStyle,
-                  ),
+                    _SingleEye(
+                      width: eyeWidth,
+                      height: eyeHeight,
+                      accent: eyeAccent,
+                      pupilShift: -pupilShift,
+                      pupilVerticalShift: pupilVerticalShift,
+                      glow: glow,
+                      tilt: tilt,
+                      diabolikStyle: diabolikStyle,
+                    ),
+                    const SizedBox(width: 28),
+                    _SingleEye(
+                      width: eyeWidth,
+                      height: eyeHeight,
+                      accent: eyeAccent,
+                      pupilShift: pupilShift,
+                      pupilVerticalShift: pupilVerticalShift,
+                      glow: glow,
+                      tilt: -tilt,
+                      diabolikStyle: diabolikStyle,
+                    ),
                 ],
               ),
             ],
@@ -858,12 +864,14 @@ class _EyesWidget extends StatelessWidget {
   }
 }
 
+
 class _SingleEye extends StatelessWidget {
   const _SingleEye({
     required this.width,
     required this.height,
     required this.accent,
     required this.pupilShift,
+    required this.pupilVerticalShift,
     required this.glow,
     required this.tilt,
     required this.diabolikStyle,
@@ -873,6 +881,7 @@ class _SingleEye extends StatelessWidget {
   final double height;
   final Color accent;
   final double pupilShift;
+  final double pupilVerticalShift;
   final double glow;
   final double tilt;
   final bool diabolikStyle;
@@ -885,7 +894,7 @@ class _SingleEye extends StatelessWidget {
       angle: diabolikStyle ? tilt : 0,
       child: SizedBox(
         width: width,
-        height: 86,
+        height: 110,
         child: Center(
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
@@ -941,7 +950,7 @@ class _SingleEye extends StatelessWidget {
                     ),
                   ),
                   Transform.translate(
-                    offset: Offset(pupilShift, 0),
+                    offset: Offset(pupilShift, pupilVerticalShift),
                     child: Container(
                       width: safeHeight * 0.42,
                       height: safeHeight * 0.42,
