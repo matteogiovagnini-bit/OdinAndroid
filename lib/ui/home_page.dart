@@ -84,12 +84,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     _speakController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 700),
+      duration: const Duration(milliseconds: 420), // 700),
     );
 
     _listenController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 900), // 1200),
     );
 
     _blinkController = AnimationController(
@@ -161,8 +161,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       case AssistantState.stopped:
         _speakController.stop();
         _listenController.stop();
+        _blinkController.stop();
         break;
-    }
+      }
   }
 
   Future<void> _scheduleBlink() async {
@@ -748,112 +749,140 @@ class _EyesWidget extends StatelessWidget {
     double eyeHeight = 34;
     double eyeWidth = 180;
     double pupilShift = 0;
-    double glow = 30;
+    double pupilVerticalShift = 0;
+    double glow = 28;
     double tilt = 0.22;
     double breathing = 0.0;
-    double pupilVerticalShift = 0;
+    double shellOpacity = 0.05;
+    bool darkSlitMode = false;
 
     Color eyeAccent = accent;
+    Color eyeFill = Colors.white;
+    Color pupilColor = Colors.black.withOpacity(0.95);
 
     if (isIdle) {
-      eyeHeight = 30;
-      eyeWidth = 190;
-      glow = 24;
+      eyeHeight = 26;
+      eyeWidth = 188;
+      glow = 18;
       tilt = 0.26;
-      breathing = 0.5 + (listenValue * 0.5);
+      breathing = 0.4 + (listenValue * 0.4);
+      pupilShift = (listenValue - 0.5) * 4;
     } else if (isListening) {
-      eyeHeight = 42 + (listenValue * 8);
-      eyeWidth = 198;
-      pupilShift = (listenValue - 0.5) * 14;
-      pupilVerticalShift = (listenValue - 0.5) * 2;
-      glow = 34;
-      tilt = 0.22;
+      eyeHeight = 52 + (listenValue * 10);
+      eyeWidth = 205;
+      pupilShift = (listenValue - 0.5) * 18;
+      pupilVerticalShift = math.sin(listenValue * math.pi * 2) * 2;
+      glow = 38;
+      tilt = 0.18;
+      shellOpacity = 0.08;
     } else if (isProcessing) {
       eyeHeight = 24 + (listenValue * 4);
-      eyeWidth = 182;
+      eyeWidth = 190;
       glow = 24;
-      tilt = 0.30;
+      tilt = 0.28;
       eyeAccent = Colors.lightBlueAccent;
+      pupilShift = math.sin(listenValue * math.pi * 2) * 5;
     } else if (isSpeaking) {
-      eyeHeight = 26 + (speakValue * 20);
-      eyeWidth = 208;
-      pupilShift = math.sin(speakValue * math.pi * 2) * 10;
-      pupilVerticalShift = math.cos(speakValue * math.pi * 4) * 3;
+      final double mouthLikePulse = (math.sin(speakValue * math.pi * 2) + 1) / 2;
+      eyeHeight = 16 + (mouthLikePulse * 28);
+      eyeWidth = 214;
+      pupilShift = math.sin(speakValue * math.pi * 2) * 12;
+      pupilVerticalShift = math.cos(speakValue * math.pi * 4) * 4;
       glow = 42;
-      tilt = 0.16;
+      tilt = 0.12;
       eyeAccent = Colors.redAccent;
+      shellOpacity = 0.10;
     } else if (isStopped) {
-      eyeHeight = 10;
-      eyeWidth = 150;
-      glow = 10;
-      tilt = 0.32;
-      eyeAccent = Colors.white38;
+      eyeHeight = 6;
+      eyeWidth = 210;
+      glow = 0;
+      tilt = 0.34;
+      eyeAccent = Colors.black;
+      eyeFill = Colors.black;
+      pupilColor = Colors.transparent;
+      darkSlitMode = true;
+      shellOpacity = 0.0;
     }
 
-    eyeHeight *= blinkScale;
+    if (!isStopped) {
+      eyeHeight *= blinkScale;
+    }
 
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         AnimatedContainer(
           duration: const Duration(milliseconds: 220),
           padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 34),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(32),
-            color: Colors.white.withOpacity(0.015),
+            color: Colors.white.withOpacity(shellOpacity),
             border: Border.all(
-              color: eyeAccent.withOpacity(0.14),
+              color: darkSlitMode
+                  ? Colors.transparent
+                  : eyeAccent.withOpacity(0.14),
               width: 1.2,
             ),
-            boxShadow: [
-              BoxShadow(
-                color: eyeAccent.withOpacity(0.06),
-                blurRadius: 40,
-                spreadRadius: 3,
-              ),
-            ],
+            boxShadow: darkSlitMode
+                ? []
+                : [
+                    BoxShadow(
+                      color: eyeAccent.withOpacity(0.06),
+                      blurRadius: 40,
+                      spreadRadius: 3,
+                    ),
+                  ],
           ),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 220),
-                width: 420 + (breathing * 8),
-                height: 8,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(99),
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.transparent,
-                      eyeAccent.withOpacity(0.12),
-                      Colors.transparent,
-                    ],
+              if (!darkSlitMode)
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  width: 420 + (breathing * 8),
+                  height: 8,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.transparent,
+                        eyeAccent.withOpacity(0.12),
+                        Colors.transparent,
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 18),
+              if (!darkSlitMode) const SizedBox(height: 20),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                    _SingleEye(
-                      width: eyeWidth,
-                      height: eyeHeight,
-                      accent: eyeAccent,
-                      pupilShift: -pupilShift,
-                      pupilVerticalShift: pupilVerticalShift,
-                      glow: glow,
-                      tilt: tilt,
-                      diabolikStyle: diabolikStyle,
-                    ),
-                    const SizedBox(width: 28),
-                    _SingleEye(
-                      width: eyeWidth,
-                      height: eyeHeight,
-                      accent: eyeAccent,
-                      pupilShift: pupilShift,
-                      pupilVerticalShift: pupilVerticalShift,
-                      glow: glow,
-                      tilt: -tilt,
-                      diabolikStyle: diabolikStyle,
-                    ),
+                  _SingleEye(
+                    width: eyeWidth,
+                    height: eyeHeight,
+                    accent: eyeAccent,
+                    fillColor: eyeFill,
+                    pupilColor: pupilColor,
+                    pupilShift: -pupilShift,
+                    pupilVerticalShift: pupilVerticalShift,
+                    glow: glow,
+                    tilt: tilt,
+                    diabolikStyle: diabolikStyle,
+                    darkSlitMode: darkSlitMode,
+                  ),
+                  const SizedBox(width: 28),
+                  _SingleEye(
+                    width: eyeWidth,
+                    height: eyeHeight,
+                    accent: eyeAccent,
+                    fillColor: eyeFill,
+                    pupilColor: pupilColor,
+                    pupilShift: pupilShift,
+                    pupilVerticalShift: pupilVerticalShift,
+                    glow: glow,
+                    tilt: -tilt,
+                    diabolikStyle: diabolikStyle,
+                    darkSlitMode: darkSlitMode,
+                  ),
                 ],
               ),
             ],
@@ -864,27 +893,32 @@ class _EyesWidget extends StatelessWidget {
   }
 }
 
-
 class _SingleEye extends StatelessWidget {
   const _SingleEye({
     required this.width,
     required this.height,
     required this.accent,
+    required this.fillColor,
+    required this.pupilColor,
     required this.pupilShift,
     required this.pupilVerticalShift,
     required this.glow,
     required this.tilt,
     required this.diabolikStyle,
+    required this.darkSlitMode,
   });
 
   final double width;
   final double height;
   final Color accent;
+  final Color fillColor;
+  final Color pupilColor;
   final double pupilShift;
   final double pupilVerticalShift;
   final double glow;
   final double tilt;
   final bool diabolikStyle;
+  final bool darkSlitMode;
 
   @override
   Widget build(BuildContext context) {
@@ -907,66 +941,85 @@ class _SingleEye extends StatelessWidget {
                 topRight: Radius.circular(width / 2),
                 bottomRight: Radius.circular(diabolikStyle ? 4 : width / 2),
               ),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.white,
-                  Colors.white.withOpacity(0.88),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: accent.withOpacity(0.38),
-                  blurRadius: glow,
-                  spreadRadius: 2,
-                ),
-                BoxShadow(
-                  color: Colors.white.withOpacity(0.18),
-                  blurRadius: 8,
-                  spreadRadius: 0.5,
-                ),
-              ],
+              gradient: darkSlitMode
+                  ? LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black,
+                        Colors.black87,
+                      ],
+                    )
+                  : LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        fillColor,
+                        fillColor.withOpacity(0.88),
+                      ],
+                    ),
+              boxShadow: darkSlitMode
+                  ? [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.55),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: accent.withOpacity(0.38),
+                        blurRadius: glow,
+                        spreadRadius: 2,
+                      ),
+                      BoxShadow(
+                        color: Colors.white.withOpacity(0.18),
+                        blurRadius: 8,
+                        spreadRadius: 0.5,
+                      ),
+                    ],
             ),
             child: ClipPath(
               clipper: diabolikStyle ? _DiabolikEyeClipper() : null,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  Positioned.fill(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.black.withOpacity(0.08),
-                            Colors.transparent,
-                            Colors.transparent,
-                            Colors.black.withOpacity(0.06),
+                  if (!darkSlitMode)
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.black.withOpacity(0.08),
+                              Colors.transparent,
+                              Colors.transparent,
+                              Colors.black.withOpacity(0.06),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (!darkSlitMode)
+                    Transform.translate(
+                      offset: Offset(pupilShift, pupilVerticalShift),
+                      child: Container(
+                        width: safeHeight * 0.42,
+                        height: safeHeight * 0.42,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: pupilColor,
+                          boxShadow: [
+                            BoxShadow(
+                              color: accent.withOpacity(0.25),
+                              blurRadius: 6,
+                              spreadRadius: 0.5,
+                            ),
                           ],
                         ),
                       ),
                     ),
-                  ),
-                  Transform.translate(
-                    offset: Offset(pupilShift, pupilVerticalShift),
-                    child: Container(
-                      width: safeHeight * 0.42,
-                      height: safeHeight * 0.42,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.black.withOpacity(0.94),
-                        boxShadow: [
-                          BoxShadow(
-                            color: accent.withOpacity(0.25),
-                            blurRadius: 6,
-                            spreadRadius: 0.5,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ),
