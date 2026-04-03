@@ -1,13 +1,20 @@
 package com.example.assistantapp
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
 import org.vosk.Model
@@ -16,13 +23,15 @@ import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
 import java.io.File
 import java.io.FileOutputStream
-import java.io.IOException
 import java.util.Locale
+import kotlin.math.roundToInt
 
 class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
 
     private val TTS_CHANNEL = "assistantapp/tts"
     private val SPEECH_CHANNEL = "assistantapp/speech"
+    private val ORIENTATION_CHANNEL = "odin/orientation_stream"
+
     private val REQ_RECORD_AUDIO = 1001
 
     private var tts: TextToSpeech? = null
@@ -37,7 +46,6 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
     private var pendingStartAfterPermission = false
     private var isModelReady = false
     private var isListening = false
-
     private var finalDelivered = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,6 +113,11 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                 else -> result.notImplemented()
             }
         }
+
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            ORIENTATION_CHANNEL
+        ).setStreamHandler(OrientationStreamHandler(this))
 
         initVoskModel()
     }
@@ -184,6 +197,7 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
 
     private fun startVoskRecognition() {
         finalDelivered = false
+
         if (!hasAudioPermission()) {
             pendingStartAfterPermission = true
             requestAudioPermission()
@@ -355,5 +369,143 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
         tts?.shutdown()
         disposeVoskRecognition()
         super.onDestroy()
+    }
+}
+
+class OrientationStreamHandler(
+    context: Context
+) : EventChannel.StreamHandler, SensorEventListener {
+
+    private val sensorManager =
+        context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+    private val rotationVectorSensor: Sensor? =
+        sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+
+    private val accelerometerSensor: Sensor? =
+        sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+    private val magnetometerSensor: Sensor? =
+        sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+
+    private var eventSink: EventChannel.EventSink? = null
+
+    private val rotationMatrix = FloatArray(9)
+    private val remappedMatrix = FloatArray(9)
+    private val orientationAngles = FloatArray(3)
+
+    private var accelValues: FloatArray? = null
+    private var magnetValues: FloatArray? = null
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        eventSink = events
+
+        if (rotationVectorSensor != null) {
+            sensorManager.registerListener(
+                this,
+                rotationVectorSensor,
+                SensorManager.SENSOR_DELAY_GAME
+            )
+            Log.d("ODIN_ORIENTATION", "Usando TYPE_ROTATION_VECTOR")
+        } else {
+            accelerometerSensor?.let {
+                sensorManager.registerListener(
+                    this,
+                    it,
+                    SensorManager.SENSOR_DELAY_GAME
+                )
+            }
+
+            magnetometerSensor?.let {
+                sensorManager.registerListener(
+                    this,
+                    it,
+                    SensorManager.SENSOR_DELAY_GAME
+                )
+            }
+
+            Log.d("ODIN_ORIENTATION", "Fallback accelerometer + magnetometer")
+        }
+    }
+
+    override fun onCancel(arguments: Any?) {
+        sensorManager.unregisterListener(this)
+        eventSink = null
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        when (event.sensor.type) {
+            Sensor.TYPE_ROTATION_VECTOR -> {
+                SensorManager.getRotationMatrixFromVector(
+                    rotationMatrix,
+                    event.values
+                )
+                emitOrientationFromMatrix(rotationMatrix)
+            }
+
+            Sensor.TYPE_ACCELEROMETER -> {
+                accelValues = event.values.clone()
+                tryEmitFromAccelMag()
+            }
+
+            Sensor.TYPE_MAGNETIC_FIELD -> {
+                magnetValues = event.values.clone()
+                tryEmitFromAccelMag()
+            }
+        }
+    }
+
+    private fun tryEmitFromAccelMag() {
+        val acc = accelValues ?: return
+        val mag = magnetValues ?: return
+
+        val success = SensorManager.getRotationMatrix(
+            rotationMatrix,
+            null,
+            acc,
+            mag
+        )
+
+        if (success) {
+            emitOrientationFromMatrix(rotationMatrix)
+        }
+    }
+
+    private fun emitOrientationFromMatrix(matrix: FloatArray) {
+        SensorManager.remapCoordinateSystem(
+            matrix,
+            SensorManager.AXIS_X,
+            SensorManager.AXIS_Z,
+            remappedMatrix
+        )
+
+        SensorManager.getOrientation(remappedMatrix, orientationAngles)
+
+        val yawDeg = Math.toDegrees(orientationAngles[0].toDouble())
+        val pitchDeg = Math.toDegrees(orientationAngles[1].toDouble())
+        val rollDeg = Math.toDegrees(orientationAngles[2].toDouble())
+
+        val payload = mapOf(
+            "yaw" to normalizeAngleDeg(yawDeg),
+            "pitch" to normalizeAngleDeg(pitchDeg),
+            "roll" to normalizeAngleDeg(rollDeg)
+        )
+
+        Log.d(
+            "ODIN_ORIENTATION",
+            "pitch=${payload["pitch"]} roll=${payload["roll"]} yaw=${payload["yaw"]}"
+        )
+
+        eventSink?.success(payload)
+    }
+
+    private fun normalizeAngleDeg(angle: Double): Double {
+        var a = angle % 360.0
+        if (a > 180.0) a -= 360.0
+        if (a < -180.0) a += 360.0
+        return ((a * 10.0).roundToInt() / 10.0)
     }
 }

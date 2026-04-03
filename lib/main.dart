@@ -1,4 +1,15 @@
 import 'package:flutter/material.dart';
+import 'app.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const VoiceAssistantApp());
+}
+
+
+/*
+
+import 'package:flutter/material.dart';
 import 'ui/home_page.dart';
 
 void main() {
@@ -22,3 +33,5 @@ class VoiceAssistantApp extends StatelessWidget {
     );
   }
 }
+*/
+

@@ -8,15 +8,12 @@ import 'package:flutter/material.dart';
 import 'package:nfc_manager/nfc_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import 'package:sensors_plus/sensors_plus.dart';
-import 'dart:math';
-
 import '../services/assistant_service.dart';
+import '../services/orientation_service.dart';
 import '../services/tts_service.dart';
 import '../services/vosk_command_service.dart';
 import '../services/wake_phrase_service.dart';
 import '../services/voice_assistant_controller.dart';
-
 
 const bool kUseVisualAvatarUi = true;
 const bool kUseDiabolikStyle = true;
@@ -33,11 +30,16 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late final VoiceAssistantController _controller;
+  late final OrientationService _orientationService;
 
-  StreamSubscription<AccelerometerEvent>? _accSub;
+  StreamSubscription<OrientationData>? _orientationSub;
 
   double _pitch = 0;
   double _roll = 0;
+  double _yaw = 0;
+  double _calibratedPitch = 0;
+  double _calibratedRoll = 0;
+  double _calibratedYaw = 0;
   String _orientationLabel = "N/A";
 
   StreamSubscription<String>? _statusSub;
@@ -84,12 +86,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     _speakController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 420), // 700),
+      duration: const Duration(milliseconds: 420),
     );
 
     _listenController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 900), // 1200),
+      duration: const Duration(milliseconds: 900),
     );
 
     _blinkController = AnimationController(
@@ -103,6 +105,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       ttsService: TtsService(),
       assistantService: AssistantService(),
     );
+
+    _orientationService = OrientationService();
 
     _statusSub = _controller.statusStream.listen((value) {
       if (!mounted) return;
@@ -328,15 +332,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   void _startOrientation() {
-    _accSub?.cancel();
+    _orientationSub?.cancel();
 
-    _accSub = accelerometerEvents.listen((event) {
-      final x = event.x;
-      final y = event.y;
-      final z = event.z;
+    _orientationService.start();
 
-      final pitch = atan2(-x, sqrt(y * y + z * z)) * 180 / pi;
-      final roll = atan2(y, z) * 180 / pi;
+    _orientationSub = _orientationService.stream.listen((data) {
+      final pitch = data.pitch;
+      final roll = data.roll;
+      final yaw = data.yaw;
 
       String orientation;
 
@@ -355,13 +358,21 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       setState(() {
         _pitch = pitch;
         _roll = roll;
+        _yaw = yaw;
+
+        _calibratedPitch = data.calibratedPitch;
+        _calibratedRoll = data.calibratedRoll;
+        _calibratedYaw = data.calibratedYaw;
+
         _orientationLabel = orientation;
       });
     });
   }
 
   void _stopOrientation() {
-    _accSub?.cancel();
+    _orientationSub?.cancel();
+    _orientationSub = null;
+    _orientationService.stop();
   }
 
   Future<void> _startAssistant() async {
@@ -427,13 +438,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Color _stateColor() {
     switch (_assistantState) {
       case AssistantState.idleWakeWord:
-        return const Color(0xFF9FE8FF);
+        return const Color(0xFF8FE7FF);
       case AssistantState.listeningCommand:
-        return const Color(0xFFFFD166);
+        return const Color(0xFF5BE7FF);
       case AssistantState.processing:
         return const Color(0xFF7FDBFF);
       case AssistantState.speaking:
-        return const Color(0xFFFF3B30);
+        return const Color(0xFFFF453A);
       case AssistantState.stopped:
         return Colors.white38;
     }
@@ -490,12 +501,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _partialSub?.cancel();
     _finalSub?.cancel();
     _stateSub?.cancel();
+
     _stopNfcSession();
+    _stopOrientation();
+
     _controller.dispose();
+    _orientationService.dispose();
+
     _speakController.dispose();
     _listenController.dispose();
     _blinkController.dispose();
-    _accSub?.cancel();
+
     _unlockAllOrientations();
     super.dispose();
   }
@@ -509,14 +525,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   Widget _buildVisualUi() {
-    final bool isHorizontal = _isPhoneHorizontal();
+    final bool isHorizontal = true; // ormai forzi landscape dopo NFC
+    final AssistantState visualState =
+        isHorizontal ? _assistantState : AssistantState.stopped;
 
-//    final AssistantState visualState =
-//        isHorizontal ? _assistantState : AssistantState.stopped;
-
-    final AssistantState visualState =_assistantState;
-
-    final color = isHorizontal ? _stateColor() : Colors.white38;
+    final Color accent = _stateColor();
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -524,22 +537,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         child: Stack(
           children: [
             Positioned.fill(
-              child: CustomPaint(
-                painter: _NoirBackgroundPainter(accent: color),
-              ),
-            ),
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black,
-                      Colors.black,
-                      color.withOpacity(0.05),
-                      Colors.black,
-                    ],
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 350),
+                child: CustomPaint(
+                  painter: _NoirBackgroundPainter(
+                    accent: accent,
+                    state: visualState,
                   ),
                 ),
               ),
@@ -552,17 +555,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   _blinkController,
                 ]),
                 builder: (context, _) {
-                  return AnimatedOpacity(
-                    duration: const Duration(milliseconds: 180),
-                    opacity: 1,
-                    child: _EyesWidget(
-                      state: visualState,
-                      accent: color,
-                      speakValue: _speakController.value,
-                      listenValue: _listenController.value,
-                      blinkValue: _blinkController.value,
-                      diabolikStyle: kUseDiabolikStyle,
-                    ),
+                  return _EyesWidget(
+                    state: visualState,
+                    accent: accent,
+                    speakValue: _speakController.value,
+                    listenValue: _listenController.value,
+                    blinkValue: _blinkController.value,
+                    diabolikStyle: kUseDiabolikStyle,
                   );
                 },
               ),
@@ -1212,47 +1211,156 @@ class _InfoCard extends StatelessWidget {
 }
 
 class _NoirBackgroundPainter extends CustomPainter {
-  _NoirBackgroundPainter({required this.accent});
+  _NoirBackgroundPainter({
+    required this.accent,
+    required this.state,
+  });
 
   final Color accent;
+  final AssistantState state;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final bool isSpeaking = state == AssistantState.speaking;
+    final bool isListening = state == AssistantState.listeningCommand;
+    final bool isIdle = state == AssistantState.idleWakeWord;
+    final bool isProcessing = state == AssistantState.processing;
+    final bool isStopped = state == AssistantState.stopped;
+
+    final List<Color> bgColors = isStopped
+        ? const [
+            Color(0xFF000000),
+            Color(0xFF010101),
+            Color(0xFF000000),
+          ]
+        : isSpeaking
+            ? const [
+                Color(0xFF050000),
+                Color(0xFF120202),
+                Color(0xFF000000),
+              ]
+            : isListening
+                ? const [
+                    Color(0xFF010508),
+                    Color(0xFF031018),
+                    Color(0xFF000000),
+                  ]
+                : isIdle
+                    ? const [
+                        Color(0xFF020407),
+                        Color(0xFF071018),
+                        Color(0xFF000000),
+                      ]
+                    : isProcessing
+                        ? const [
+                            Color(0xFF020407),
+                            Color(0xFF08131A),
+                            Color(0xFF000000),
+                          ]
+                        : const [
+                            Color(0xFF020202),
+                            Color(0xFF050505),
+                            Color(0xFF000000),
+                          ];
+
     final bg = Paint()
-      ..shader = const LinearGradient(
+      ..shader = LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
-        colors: [
-          Color(0xFF020202),
-          Color(0xFF050505),
-          Color(0xFF000000),
-        ],
+        colors: bgColors,
       ).createShader(Offset.zero & size);
 
     canvas.drawRect(Offset.zero & size, bg);
 
-    final centerGlow = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          accent.withOpacity(0.10),
-          accent.withOpacity(0.04),
-          Colors.transparent,
-        ],
-      ).createShader(
-        Rect.fromCircle(
-          center: Offset(size.width / 2, size.height * 0.42),
-          radius: size.width * 0.48,
-        ),
-      );
+    final double mainGlowOpacity = isStopped
+        ? 0.0
+        : isSpeaking
+            ? 0.18
+            : isListening
+                ? 0.14
+                : isIdle
+                    ? 0.10
+                    : isProcessing
+                        ? 0.12
+                        : 0.08;
 
-    canvas.drawCircle(
-      Offset(size.width / 2, size.height * 0.42),
-      size.width * 0.48,
-      centerGlow,
-    );
+    final double mainGlowRadius = isStopped
+        ? 0
+        : isSpeaking
+            ? size.width * 0.62
+            : size.width * 0.52;
+
+    if (!isStopped) {
+      final centerGlow = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            accent.withOpacity(mainGlowOpacity),
+            accent.withOpacity(mainGlowOpacity * 0.45),
+            Colors.transparent,
+          ],
+        ).createShader(
+          Rect.fromCircle(
+            center: Offset(size.width / 2, size.height * 0.45),
+            radius: mainGlowRadius,
+          ),
+        );
+
+      canvas.drawCircle(
+        Offset(size.width / 2, size.height * 0.45),
+        mainGlowRadius,
+        centerGlow,
+      );
+    }
+
+    if (isSpeaking) {
+      final sideGlowLeft = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Colors.redAccent.withOpacity(0.12),
+            Colors.redAccent.withOpacity(0.04),
+            Colors.transparent,
+          ],
+        ).createShader(
+          Rect.fromCircle(
+            center: Offset(size.width * 0.25, size.height * 0.48),
+            radius: size.width * 0.22,
+          ),
+        );
+
+      final sideGlowRight = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Colors.redAccent.withOpacity(0.12),
+            Colors.redAccent.withOpacity(0.04),
+            Colors.transparent,
+          ],
+        ).createShader(
+          Rect.fromCircle(
+            center: Offset(size.width * 0.75, size.height * 0.48),
+            radius: size.width * 0.22,
+          ),
+        );
+
+      canvas.drawCircle(
+        Offset(size.width * 0.25, size.height * 0.48),
+        size.width * 0.22,
+        sideGlowLeft,
+      );
+      canvas.drawCircle(
+        Offset(size.width * 0.75, size.height * 0.48),
+        size.width * 0.22,
+        sideGlowRight,
+      );
+    }
+
+    final slashOpacity = isStopped
+        ? 0.015
+        : isSpeaking
+            ? 0.04
+            : 0.03;
 
     final slashPaint = Paint()
-      ..color = Colors.white.withOpacity(0.03)
+      ..color = Colors.white.withOpacity(slashOpacity)
       ..strokeWidth = 1.2;
 
     for (int i = -2; i < 8; i++) {
@@ -1268,10 +1376,10 @@ class _NoirBackgroundPainter extends CustomPainter {
       ..shader = RadialGradient(
         colors: [
           Colors.transparent,
-          Colors.black.withOpacity(0.05),
-          Colors.black.withOpacity(0.42),
+          Colors.black.withOpacity(isStopped ? 0.12 : 0.08),
+          Colors.black.withOpacity(isStopped ? 0.58 : 0.42),
         ],
-        stops: const [0.55, 0.78, 1.0],
+        stops: const [0.52, 0.78, 1.0],
       ).createShader(Offset.zero & size);
 
     canvas.drawRect(Offset.zero & size, vignette);
@@ -1279,6 +1387,6 @@ class _NoirBackgroundPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _NoirBackgroundPainter oldDelegate) {
-    return oldDelegate.accent != accent;
+    return oldDelegate.accent != accent || oldDelegate.state != state;
   }
 }
