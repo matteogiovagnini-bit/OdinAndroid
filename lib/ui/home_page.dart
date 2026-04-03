@@ -18,8 +18,17 @@ import '../services/voice_assistant_controller.dart';
 const bool kUseVisualAvatarUi = true;
 const bool kUseDiabolikStyle = true;
 
-// METTI QUI L'ID DEL TUO TAG NFC AUTORIZZATO
+// ── NFC ──────────────────────────────────────────────────────
 const String kAllowedNfcTagId = '04:73:6C:7A:9A:3D:80';
+
+// ── Gimbal: indirizzo ESP32 ───────────────────────────────────
+// Cambia qui se usi IP fisso invece di mDNS
+const String kEsp32BaseUrl = 'http://odin.local';
+
+// ── Gimbal: target di posa iniziale ──────────────────────────
+// Possono essere modificati a runtime via _orientationService.gimbalSetTarget()
+const double kGimbalTargetPitch = -8.0; // gradi – leggermente inclinato avanti
+const double kGimbalTargetRoll  =  0.0; // gradi – testa dritta
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -40,7 +49,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   double _calibratedPitch = 0;
   double _calibratedRoll = 0;
   double _calibratedYaw = 0;
-  String _orientationLabel = "N/A";
+  String _orientationLabel = 'N/A';
 
   StreamSubscription<String>? _statusSub;
   StreamSubscription<String>? _partialSub;
@@ -53,16 +62,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   String _nfcStatus = 'Avvicina il tag NFC autorizzato';
   AssistantState _assistantState = AssistantState.stopped;
 
+  // Stato gimbal (solo per debug UI, non cambia la visual avatar)
+  bool _gimbalActive = false;
+
   late final AnimationController _speakController;
   late final AnimationController _listenController;
   late final AnimationController _blinkController;
 
   bool _nfcSessionRunning = false;
   bool _nfcUnlocking = false;
-
-  bool _isPhoneHorizontal() {
-    return _orientationLabel == 'DESTRA' || _orientationLabel == 'SINISTRA';
-  }
 
   Future<void> _lockLandscapeMode() async {
     await SystemChrome.setPreferredOrientations([
@@ -80,6 +88,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     ]);
   }
 
+  // ── initState ─────────────────────────────────────────────
+
   @override
   void initState() {
     super.initState();
@@ -88,12 +98,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(milliseconds: 420),
     );
-
     _listenController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
     );
-
     _blinkController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -106,42 +114,38 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       assistantService: AssistantService(),
     );
 
+    // Configurazione URL ESP32 prima di tutto il resto
+    OrientationService.setBaseUrl(kEsp32BaseUrl);
     _orientationService = OrientationService();
 
     _statusSub = _controller.statusStream.listen((value) {
       if (!mounted) return;
-      setState(() {
-        _status = value;
-      });
+      setState(() => _status = value);
     });
 
     _partialSub = _controller.partialStream.listen((value) {
       if (!mounted) return;
-      setState(() {
-        _partialText = value;
-      });
+      setState(() => _partialText = value);
     });
 
     _finalSub = _controller.finalStream.listen((value) {
       if (!mounted) return;
-      setState(() {
-        _finalText = value;
-      });
+      setState(() => _finalText = value);
     });
 
     _stateSub = _controller.stateStream.listen((value) {
       if (!mounted) return;
-
-      setState(() {
-        _assistantState = value;
-      });
-
+      setState(() => _assistantState = value);
       _updateAnimationsForState(value);
     });
-    
+
+    // L'orientamento parte subito (legge sensori ma NON invia all'ESP32
+    // finché il gimbal non viene abilitato esplicitamente in _startAssistant)
     _startOrientation();
     _startNfcGateMode();
   }
+
+  // ── Animazioni ────────────────────────────────────────────
 
   void _updateAnimationsForState(AssistantState state) {
     switch (state) {
@@ -167,20 +171,20 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         _listenController.stop();
         _blinkController.stop();
         break;
-      }
+    }
   }
 
   Future<void> _scheduleBlink() async {
     if (!mounted) return;
     if (_assistantState != AssistantState.idleWakeWord) return;
-
     await Future.delayed(const Duration(seconds: 4));
     if (!mounted) return;
     if (_assistantState != AssistantState.idleWakeWord) return;
-
     await _blinkController.forward(from: 0);
     await _blinkController.reverse();
   }
+
+  // ── NFC Gate ──────────────────────────────────────────────
 
   Future<void> _startNfcGateMode() async {
     try {
@@ -219,16 +223,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
 
     if (!mounted) return;
-    setState(() {
-      _nfcStatus = 'Avvicina il tag NFC autorizzato';
-    });
+    setState(() => _nfcStatus = 'Avvicina il tag NFC autorizzato');
 
     await _startNfcSession();
   }
 
   Future<void> _startNfcSession() async {
     if (_nfcSessionRunning) return;
-
     _nfcSessionRunning = true;
     _nfcUnlocking = false;
 
@@ -267,7 +268,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
             await _stopNfcSession();
             await _startAssistant();
-            
           } else {
             if (!mounted) return;
             setState(() {
@@ -278,7 +278,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         } catch (e, st) {
           debugPrint('ERRORE NFC: $e');
           debugPrintStack(stackTrace: st);
-
           if (!mounted) return;
           setState(() {
             _nfcStatus = 'Errore NFC';
@@ -291,11 +290,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _stopNfcSession() async {
     if (!_nfcSessionRunning) return;
-
     try {
       await NfcManager.instance.stopSession();
     } catch (_) {
-      // ignora eventuali errori di stop session
     } finally {
       _nfcSessionRunning = false;
       _nfcUnlocking = false;
@@ -308,63 +305,48 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       if (androidTag != null && androidTag.id.isNotEmpty) {
         return _bytesToHex(androidTag.id);
       }
-    } catch (_) {
-      // ignora e prova fallback sotto
-    }
-
-    // fallback di debug: mostra il payload grezzo se serve capire il tipo reale
+    } catch (_) {}
     debugPrint('NFC raw tag data: ${tag.data}');
     return null;
   }
 
-  String _bytesToHex(List<int> bytes) {
-    return bytes
-        .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
-        .join(':');
-  }
+  String _bytesToHex(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(':');
 
-  String _normalizeTagId(String value) {
-  return value
-      .replaceAll('-', ':')
-      .replaceAll(' ', '')
-      .toUpperCase()
-      .trim();
-  }
+  String _normalizeTagId(String value) =>
+      value.replaceAll('-', ':').replaceAll(' ', '').toUpperCase().trim();
+
+  // ── Orientamento (sempre attivo, invio ESP32 solo quando gimbal ON) ──
 
   void _startOrientation() {
     _orientationSub?.cancel();
-
     _orientationService.start();
 
     _orientationSub = _orientationService.stream.listen((data) {
       final pitch = data.pitch;
-      final roll = data.roll;
-      final yaw = data.yaw;
+      final roll  = data.roll;
+      final yaw   = data.yaw;
 
-      String orientation;
-
+      String label;
       if (roll > 55 || roll < -55) {
-        orientation = roll > 0 ? "DESTRA" : "SINISTRA";
+        label = roll > 0 ? 'DESTRA' : 'SINISTRA';
       } else if (pitch > 55) {
-        orientation = "VERTICALE";
+        label = 'VERTICALE';
       } else if (pitch < -55) {
-        orientation = "CAPOVOLTO";
+        label = 'CAPOVOLTO';
       } else {
-        orientation = "PIATTO";
+        label = 'PIATTO';
       }
 
       if (!mounted) return;
-
       setState(() {
         _pitch = pitch;
-        _roll = roll;
-        _yaw = yaw;
-
+        _roll  = roll;
+        _yaw   = yaw;
         _calibratedPitch = data.calibratedPitch;
-        _calibratedRoll = data.calibratedRoll;
-        _calibratedYaw = data.calibratedYaw;
-
-        _orientationLabel = orientation;
+        _calibratedRoll  = data.calibratedRoll;
+        _calibratedYaw   = data.calibratedYaw;
+        _orientationLabel = label;
       });
     });
   }
@@ -375,22 +357,56 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _orientationService.stop();
   }
 
+  // ── Gimbal ────────────────────────────────────────────────
+
+  /// Abilita il gimbal sull'ESP32 e avvia l'invio dei dati di orientamento.
+  /// Imposta anche il target di posa iniziale.
+  Future<void> _enableGimbal() async {
+    try {
+      // Prima imposta il target, poi abilita (così l'ESP32 parte già calibrato)
+      await _orientationService.gimbalSetTarget(
+        kGimbalTargetPitch,
+        kGimbalTargetRoll,
+      );
+      final ok = await _orientationService.gimbalEnable(true);
+      if (mounted) setState(() => _gimbalActive = ok);
+      debugPrint('[Gimbal] Abilitato: $ok');
+    } catch (e) {
+      debugPrint('[Gimbal] Errore abilitazione: $e');
+    }
+  }
+
+  /// Disabilita il gimbal sull'ESP32, porta i servi in home e
+  /// interrompe l'invio dei dati di orientamento.
+  Future<void> _disableGimbal() async {
+    try {
+      await _orientationService.gimbalHome();
+      await _orientationService.gimbalEnable(false);
+      if (mounted) setState(() => _gimbalActive = false);
+      debugPrint('[Gimbal] Disabilitato');
+    } catch (e) {
+      debugPrint('[Gimbal] Errore disabilitazione: $e');
+    }
+  }
+
+  // ── Avvio / Stop assistente ───────────────────────────────
+
   Future<void> _startAssistant() async {
     try {
       if (!mounted) return;
-      setState(() {
-        _nfcStatus = 'NFC sbloccato';
-      });
+      setState(() => _nfcStatus = 'NFC sbloccato');
 
       await _lockLandscapeMode();
       await _controller.start();
-//      _startOrientation();
-      await _controller.ttsService.speak("Sistema attivato");
 
+      // ① Abilita il gimbal: i dati di orientamento iniziano a fluire
+      //    verso l'ESP32 e i servi si assestano sulla posa target.
+      await _enableGimbal();
+
+      await _controller.ttsService.speak('Sistema attivato');
     } catch (e, st) {
       debugPrint('ERRORE AVVIO ASSISTENTE: $e');
       debugPrintStack(stackTrace: st);
-
       if (!mounted) return;
       setState(() {
         _assistantState = AssistantState.stopped;
@@ -402,23 +418,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _stopAssistant() async {
     try {
+      // ② Disabilita il gimbal prima di fermare il controller:
+      //    così i servi vanno in home mentre il TTS è ancora funzionante.
+      await _disableGimbal();
+
       await _controller.stopAll();
-//      _stopOrientation();
       await _unlockAllOrientations();
       await _startNfcGateMode();
     } catch (e, st) {
       debugPrint('ERRORE STOP ASSISTENTE: $e');
       debugPrintStack(stackTrace: st);
-
       if (!mounted) return;
-      setState(() {
-        _status = 'Errore stop assistente: $e';
-      });
+      setState(() => _status = 'Errore stop assistente: $e');
     }
   }
 
   Future<void> _restartAssistant() async {
     try {
+      await _disableGimbal();
       await _controller.stopAll();
       await _unlockAllOrientations();
       await Future.delayed(const Duration(milliseconds: 300));
@@ -426,7 +443,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     } catch (e, st) {
       debugPrint('ERRORE RIAVVIO ASSISTENTE: $e');
       debugPrintStack(stackTrace: st);
-
       if (!mounted) return;
       setState(() {
         _assistantState = AssistantState.stopped;
@@ -434,6 +450,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       });
     }
   }
+
+  // ── Helpers UI ────────────────────────────────────────────
 
   Color _stateColor() {
     switch (_assistantState) {
@@ -452,48 +470,35 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   String _stateLabel() {
     switch (_assistantState) {
-      case AssistantState.idleWakeWord:
-        return 'IN ATTESA';
-      case AssistantState.listeningCommand:
-        return 'TI ASCOLTO';
-      case AssistantState.processing:
-        return 'ELABORO';
-      case AssistantState.speaking:
-        return 'PARLO';
-      case AssistantState.stopped:
-        return 'FERMO';
+      case AssistantState.idleWakeWord:    return 'IN ATTESA';
+      case AssistantState.listeningCommand: return 'TI ASCOLTO';
+      case AssistantState.processing:      return 'ELABORO';
+      case AssistantState.speaking:        return 'PARLO';
+      case AssistantState.stopped:         return 'FERMO';
     }
   }
 
   String _stateHint() {
     switch (_assistantState) {
-      case AssistantState.idleWakeWord:
-        return 'Di "Ehi Odin"';
-      case AssistantState.listeningCommand:
-        return 'Pronuncia il comando';
-      case AssistantState.processing:
-        return 'Sto preparando la risposta';
-      case AssistantState.speaking:
-        return 'Sto rispondendo';
-      case AssistantState.stopped:
-        return 'Avvicina il tag NFC autorizzato';
+      case AssistantState.idleWakeWord:    return 'Di "Ehi Odin"';
+      case AssistantState.listeningCommand: return 'Pronuncia il comando';
+      case AssistantState.processing:      return 'Sto preparando la risposta';
+      case AssistantState.speaking:        return 'Sto rispondendo';
+      case AssistantState.stopped:         return 'Avvicina il tag NFC autorizzato';
     }
   }
 
   IconData _stateIcon() {
     switch (_assistantState) {
-      case AssistantState.idleWakeWord:
-        return Icons.hearing;
-      case AssistantState.listeningCommand:
-        return Icons.mic;
-      case AssistantState.processing:
-        return Icons.psychology_alt;
-      case AssistantState.speaking:
-        return Icons.volume_up;
-      case AssistantState.stopped:
-        return Icons.nfc;
+      case AssistantState.idleWakeWord:    return Icons.hearing;
+      case AssistantState.listeningCommand: return Icons.mic;
+      case AssistantState.processing:      return Icons.psychology_alt;
+      case AssistantState.speaking:        return Icons.volume_up;
+      case AssistantState.stopped:         return Icons.nfc;
     }
   }
+
+  // ── dispose ───────────────────────────────────────────────
 
   @override
   void dispose() {
@@ -504,6 +509,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     _stopNfcSession();
     _stopOrientation();
+
+    // Sicurezza: se il widget viene distrutto con il gimbal attivo,
+    // manda i servi in home in modo fire-and-forget.
+    if (_gimbalActive) {
+      _orientationService.gimbalHome().ignore();
+      _orientationService.gimbalEnable(false).ignore();
+    }
 
     _controller.dispose();
     _orientationService.dispose();
@@ -516,19 +528,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  // ── Build ─────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    if (kUseVisualAvatarUi) {
-      return _buildVisualUi();
-    }
+    if (kUseVisualAvatarUi) return _buildVisualUi();
     return _buildDebugUi();
   }
 
   Widget _buildVisualUi() {
-    final bool isHorizontal = true; // ormai forzi landscape dopo NFC
-    final AssistantState visualState =
-        isHorizontal ? _assistantState : AssistantState.stopped;
-
+    // Dopo il tag NFC il dispositivo è sempre in landscape
+    final AssistantState visualState = _assistantState;
     final Color accent = _stateColor();
 
     return Scaffold(
@@ -610,16 +620,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: color.withOpacity(0.15),
-                        border: Border.all(
-                          color: color.withOpacity(0.35),
-                          width: 2,
-                        ),
+                        border: Border.all(color: color.withOpacity(0.35), width: 2),
                       ),
-                      child: Icon(
-                        _stateIcon(),
-                        size: 44,
-                        color: color,
-                      ),
+                      child: Icon(_stateIcon(), size: 44, color: color),
                     ),
                     const SizedBox(height: 16),
                     Text(
@@ -633,32 +636,43 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      _stateHint(),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 16),
-                    ),
+                    Text(_stateHint(), textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 16)),
                     const SizedBox(height: 10),
-                    Text(
-                      _status,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 14),
-                    ),
+                    Text(_status, textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 14)),
                     const SizedBox(height: 8),
-                    Text(
-                      _nfcStatus,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 12),
+                    Text(_nfcStatus, textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 12)),
+                    const SizedBox(height: 6),
+                    // Badge gimbal
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _gimbalActive
+                            ? Colors.green.withOpacity(0.20)
+                            : Colors.grey.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(99),
+                        border: Border.all(
+                          color: _gimbalActive ? Colors.green : Colors.grey,
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        _gimbalActive ? 'GIMBAL ON' : 'GIMBAL OFF',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: _gimbalActive ? Colors.green : Colors.grey,
+                          letterSpacing: 1.1,
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 16),
-              _InfoCard(
-                title: 'Tag NFC autorizzato',
-                value: kAllowedNfcTagId,
-                icon: Icons.nfc,
-              ),
+              _InfoCard(title: 'Tag NFC autorizzato', value: kAllowedNfcTagId, icon: Icons.nfc),
               const SizedBox(height: 12),
               _InfoCard(
                 title: 'Parziale',
@@ -674,8 +688,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               const SizedBox(height: 8),
               _InfoCard(
                 title: 'Orientamento',
-                value: '$_orientationLabel\nPitch: ${_pitch.toStringAsFixed(1)} | Roll: ${_roll.toStringAsFixed(1)}',
+                value: '$_orientationLabel\n'
+                    'Pitch: ${_pitch.toStringAsFixed(1)} | Roll: ${_roll.toStringAsFixed(1)}\n'
+                    'Cal Pitch: ${_calibratedPitch.toStringAsFixed(1)} | Cal Roll: ${_calibratedRoll.toStringAsFixed(1)}',
                 icon: Icons.screen_rotation,
+              ),
+              const SizedBox(height: 12),
+              _InfoCard(
+                title: 'Gimbal target',
+                value: 'Pitch: $kGimbalTargetPitch° | Roll: $kGimbalTargetRoll°\n'
+                    'ESP32: $kEsp32BaseUrl',
+                icon: Icons.settings_remote,
               ),
               const SizedBox(height: 12),
               _InfoCard(
@@ -718,6 +741,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 }
 
+// ═══════════════════════════════════════════════════════════
+//  Widget stateless – nessuna modifica rispetto all'originale
+// ═══════════════════════════════════════════════════════════
+
 class _EyesWidget extends StatelessWidget {
   const _EyesWidget({
     required this.state,
@@ -737,75 +764,54 @@ class _EyesWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool isSpeaking = state == AssistantState.speaking;
-    final bool isListening = state == AssistantState.listeningCommand;
+    final bool isSpeaking   = state == AssistantState.speaking;
+    final bool isListening  = state == AssistantState.listeningCommand;
     final bool isProcessing = state == AssistantState.processing;
-    final bool isStopped = state == AssistantState.stopped;
-    final bool isIdle = state == AssistantState.idleWakeWord;
+    final bool isStopped    = state == AssistantState.stopped;
+    final bool isIdle       = state == AssistantState.idleWakeWord;
 
     final double blinkScale = 1.0 - (blinkValue * 0.94);
 
-    double eyeHeight = 34;
-    double eyeWidth = 180;
-    double pupilShift = 0;
+    double eyeHeight    = 34;
+    double eyeWidth     = 180;
+    double pupilShift   = 0;
     double pupilVerticalShift = 0;
-    double glow = 28;
-    double tilt = 0.22;
-    double breathing = 0.0;
+    double glow         = 28;
+    double tilt         = 0.22;
+    double breathing    = 0.0;
     double shellOpacity = 0.05;
-    bool darkSlitMode = false;
+    bool darkSlitMode   = false;
 
-    Color eyeAccent = accent;
-    Color eyeFill = Colors.white;
+    Color eyeAccent  = accent;
+    Color eyeFill    = Colors.white;
     Color pupilColor = Colors.black.withOpacity(0.95);
 
     if (isIdle) {
-      eyeHeight = 26;
-      eyeWidth = 188;
-      glow = 18;
-      tilt = 0.26;
+      eyeHeight = 26; eyeWidth = 188; glow = 18; tilt = 0.26;
       breathing = 0.4 + (listenValue * 0.4);
       pupilShift = (listenValue - 0.5) * 4;
     } else if (isListening) {
-      eyeHeight = 52 + (listenValue * 10);
-      eyeWidth = 205;
+      eyeHeight = 52 + (listenValue * 10); eyeWidth = 205;
       pupilShift = (listenValue - 0.5) * 18;
       pupilVerticalShift = math.sin(listenValue * math.pi * 2) * 2;
-      glow = 38;
-      tilt = 0.18;
-      shellOpacity = 0.08;
+      glow = 38; tilt = 0.18; shellOpacity = 0.08;
     } else if (isProcessing) {
-      eyeHeight = 24 + (listenValue * 4);
-      eyeWidth = 190;
-      glow = 24;
-      tilt = 0.28;
-      eyeAccent = Colors.lightBlueAccent;
+      eyeHeight = 24 + (listenValue * 4); eyeWidth = 190;
+      glow = 24; tilt = 0.28; eyeAccent = Colors.lightBlueAccent;
       pupilShift = math.sin(listenValue * math.pi * 2) * 5;
     } else if (isSpeaking) {
       final double mouthLikePulse = (math.sin(speakValue * math.pi * 2) + 1) / 2;
-      eyeHeight = 16 + (mouthLikePulse * 28);
-      eyeWidth = 214;
+      eyeHeight = 16 + (mouthLikePulse * 28); eyeWidth = 214;
       pupilShift = math.sin(speakValue * math.pi * 2) * 12;
       pupilVerticalShift = math.cos(speakValue * math.pi * 4) * 4;
-      glow = 42;
-      tilt = 0.12;
-      eyeAccent = Colors.redAccent;
-      shellOpacity = 0.10;
+      glow = 42; tilt = 0.12; eyeAccent = Colors.redAccent; shellOpacity = 0.10;
     } else if (isStopped) {
-      eyeHeight = 6;
-      eyeWidth = 210;
-      glow = 0;
-      tilt = 0.34;
-      eyeAccent = Colors.black;
-      eyeFill = Colors.black;
-      pupilColor = Colors.transparent;
-      darkSlitMode = true;
-      shellOpacity = 0.0;
+      eyeHeight = 6; eyeWidth = 210; glow = 0; tilt = 0.34;
+      eyeAccent = Colors.black; eyeFill = Colors.black;
+      pupilColor = Colors.transparent; darkSlitMode = true; shellOpacity = 0.0;
     }
 
-    if (!isStopped) {
-      eyeHeight *= blinkScale;
-    }
+    if (!isStopped) eyeHeight *= blinkScale;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -817,20 +823,12 @@ class _EyesWidget extends StatelessWidget {
             borderRadius: BorderRadius.circular(32),
             color: Colors.white.withOpacity(shellOpacity),
             border: Border.all(
-              color: darkSlitMode
-                  ? Colors.transparent
-                  : eyeAccent.withOpacity(0.14),
+              color: darkSlitMode ? Colors.transparent : eyeAccent.withOpacity(0.14),
               width: 1.2,
             ),
             boxShadow: darkSlitMode
                 ? []
-                : [
-                    BoxShadow(
-                      color: eyeAccent.withOpacity(0.06),
-                      blurRadius: 40,
-                      spreadRadius: 3,
-                    ),
-                  ],
+                : [BoxShadow(color: eyeAccent.withOpacity(0.06), blurRadius: 40, spreadRadius: 3)],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -856,31 +854,19 @@ class _EyesWidget extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _SingleEye(
-                    width: eyeWidth,
-                    height: eyeHeight,
-                    accent: eyeAccent,
-                    fillColor: eyeFill,
-                    pupilColor: pupilColor,
-                    pupilShift: -pupilShift,
-                    pupilVerticalShift: pupilVerticalShift,
-                    glow: glow,
-                    tilt: tilt,
-                    diabolikStyle: diabolikStyle,
-                    darkSlitMode: darkSlitMode,
+                    width: eyeWidth, height: eyeHeight,
+                    accent: eyeAccent, fillColor: eyeFill, pupilColor: pupilColor,
+                    pupilShift: -pupilShift, pupilVerticalShift: pupilVerticalShift,
+                    glow: glow, tilt: tilt,
+                    diabolikStyle: diabolikStyle, darkSlitMode: darkSlitMode,
                   ),
                   const SizedBox(width: 28),
                   _SingleEye(
-                    width: eyeWidth,
-                    height: eyeHeight,
-                    accent: eyeAccent,
-                    fillColor: eyeFill,
-                    pupilColor: pupilColor,
-                    pupilShift: pupilShift,
-                    pupilVerticalShift: pupilVerticalShift,
-                    glow: glow,
-                    tilt: -tilt,
-                    diabolikStyle: diabolikStyle,
-                    darkSlitMode: darkSlitMode,
+                    width: eyeWidth, height: eyeHeight,
+                    accent: eyeAccent, fillColor: eyeFill, pupilColor: pupilColor,
+                    pupilShift: pupilShift, pupilVerticalShift: pupilVerticalShift,
+                    glow: glow, tilt: -tilt,
+                    diabolikStyle: diabolikStyle, darkSlitMode: darkSlitMode,
                   ),
                 ],
               ),
@@ -935,47 +921,27 @@ class _SingleEye extends StatelessWidget {
             height: safeHeight,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(diabolikStyle ? 4 : width / 2),
-                bottomLeft: Radius.circular(width / 2),
-                topRight: Radius.circular(width / 2),
+                topLeft:     Radius.circular(diabolikStyle ? 4 : width / 2),
+                bottomLeft:  Radius.circular(width / 2),
+                topRight:    Radius.circular(width / 2),
                 bottomRight: Radius.circular(diabolikStyle ? 4 : width / 2),
               ),
               gradient: darkSlitMode
-                  ? LinearGradient(
+                  ? const LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.black,
-                        Colors.black87,
-                      ],
+                      colors: [Colors.black, Colors.black87],
                     )
                   : LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
-                      colors: [
-                        fillColor,
-                        fillColor.withOpacity(0.88),
-                      ],
+                      colors: [fillColor, fillColor.withOpacity(0.88)],
                     ),
               boxShadow: darkSlitMode
-                  ? [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.55),
-                        blurRadius: 10,
-                        spreadRadius: 1,
-                      ),
-                    ]
+                  ? [BoxShadow(color: Colors.black.withOpacity(0.55), blurRadius: 10, spreadRadius: 1)]
                   : [
-                      BoxShadow(
-                        color: accent.withOpacity(0.38),
-                        blurRadius: glow,
-                        spreadRadius: 2,
-                      ),
-                      BoxShadow(
-                        color: Colors.white.withOpacity(0.18),
-                        blurRadius: 8,
-                        spreadRadius: 0.5,
-                      ),
+                      BoxShadow(color: accent.withOpacity(0.38), blurRadius: glow, spreadRadius: 2),
+                      BoxShadow(color: Colors.white.withOpacity(0.18), blurRadius: 8, spreadRadius: 0.5),
                     ],
             ),
             child: ClipPath(
@@ -1010,11 +976,7 @@ class _SingleEye extends StatelessWidget {
                           shape: BoxShape.circle,
                           color: pupilColor,
                           boxShadow: [
-                            BoxShadow(
-                              color: accent.withOpacity(0.25),
-                              blurRadius: 6,
-                              spreadRadius: 0.5,
-                            ),
+                            BoxShadow(color: accent.withOpacity(0.25), blurRadius: 6, spreadRadius: 0.5),
                           ],
                         ),
                       ),
@@ -1033,129 +995,17 @@ class _DiabolikEyeClipper extends CustomClipper<Path> {
   @override
   Path getClip(Size size) {
     final p = Path();
-
     p.moveTo(0, size.height * 0.62);
-    p.quadraticBezierTo(
-      size.width * 0.18,
-      size.height * 0.08,
-      size.width * 0.82,
-      size.height * 0.18,
-    );
-    p.quadraticBezierTo(
-      size.width * 0.96,
-      size.height * 0.22,
-      size.width,
-      size.height * 0.44,
-    );
-    p.quadraticBezierTo(
-      size.width * 0.84,
-      size.height * 0.90,
-      size.width * 0.18,
-      size.height * 0.80,
-    );
-    p.quadraticBezierTo(
-      size.width * 0.04,
-      size.height * 0.76,
-      0,
-      size.height * 0.62,
-    );
+    p.quadraticBezierTo(size.width * 0.18, size.height * 0.08, size.width * 0.82, size.height * 0.18);
+    p.quadraticBezierTo(size.width * 0.96, size.height * 0.22, size.width, size.height * 0.44);
+    p.quadraticBezierTo(size.width * 0.84, size.height * 0.90, size.width * 0.18, size.height * 0.80);
+    p.quadraticBezierTo(size.width * 0.04, size.height * 0.76, 0, size.height * 0.62);
     p.close();
-
     return p;
   }
 
   @override
   bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
-}
-
-class _VisualTranscriptCard extends StatelessWidget {
-  const _VisualTranscriptCard({
-    required this.title,
-    required this.value,
-  });
-
-  final String title;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 320,
-      constraints: const BoxConstraints(minHeight: 64),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withOpacity(0.10)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.2,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            value.isEmpty ? '...' : value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 15,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _GlassButton extends StatelessWidget {
-  const _GlassButton({
-    required this.icon,
-    required this.label,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool enabled;
-  final Future<void> Function() onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Opacity(
-      opacity: enabled ? 1 : 0.45,
-      child: InkWell(
-        onTap: enabled ? onTap : null,
-        borderRadius: BorderRadius.circular(18),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.white.withOpacity(0.10)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, color: Colors.white),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: const TextStyle(color: Colors.white),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _InfoCard extends StatelessWidget {
@@ -1176,9 +1026,7 @@ class _InfoCard extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: Theme.of(context).dividerColor,
-        ),
+        border: Border.all(color: Theme.of(context).dividerColor),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1189,18 +1037,10 @@ class _InfoCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
+                Text(title,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                 const SizedBox(height: 6),
-                Text(
-                  value,
-                  style: const TextStyle(fontSize: 15),
-                ),
+                Text(value, style: const TextStyle(fontSize: 15)),
               ],
             ),
           ),
@@ -1211,158 +1051,93 @@ class _InfoCard extends StatelessWidget {
 }
 
 class _NoirBackgroundPainter extends CustomPainter {
-  _NoirBackgroundPainter({
-    required this.accent,
-    required this.state,
-  });
+  _NoirBackgroundPainter({required this.accent, required this.state});
 
   final Color accent;
   final AssistantState state;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final bool isSpeaking = state == AssistantState.speaking;
-    final bool isListening = state == AssistantState.listeningCommand;
-    final bool isIdle = state == AssistantState.idleWakeWord;
+    final bool isSpeaking   = state == AssistantState.speaking;
+    final bool isListening  = state == AssistantState.listeningCommand;
+    final bool isIdle       = state == AssistantState.idleWakeWord;
     final bool isProcessing = state == AssistantState.processing;
-    final bool isStopped = state == AssistantState.stopped;
+    final bool isStopped    = state == AssistantState.stopped;
 
     final List<Color> bgColors = isStopped
-        ? const [
-            Color(0xFF000000),
-            Color(0xFF010101),
-            Color(0xFF000000),
-          ]
+        ? const [Color(0xFF000000), Color(0xFF010101), Color(0xFF000000)]
         : isSpeaking
-            ? const [
-                Color(0xFF050000),
-                Color(0xFF120202),
-                Color(0xFF000000),
-              ]
+            ? const [Color(0xFF050000), Color(0xFF120202), Color(0xFF000000)]
             : isListening
-                ? const [
-                    Color(0xFF010508),
-                    Color(0xFF031018),
-                    Color(0xFF000000),
-                  ]
+                ? const [Color(0xFF010508), Color(0xFF031018), Color(0xFF000000)]
                 : isIdle
-                    ? const [
-                        Color(0xFF020407),
-                        Color(0xFF071018),
-                        Color(0xFF000000),
-                      ]
+                    ? const [Color(0xFF020407), Color(0xFF071018), Color(0xFF000000)]
                     : isProcessing
-                        ? const [
-                            Color(0xFF020407),
-                            Color(0xFF08131A),
-                            Color(0xFF000000),
-                          ]
-                        : const [
-                            Color(0xFF020202),
-                            Color(0xFF050505),
-                            Color(0xFF000000),
-                          ];
+                        ? const [Color(0xFF020407), Color(0xFF08131A), Color(0xFF000000)]
+                        : const [Color(0xFF020202), Color(0xFF050505), Color(0xFF000000)];
 
-    final bg = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: bgColors,
-      ).createShader(Offset.zero & size);
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: bgColors,
+        ).createShader(Offset.zero & size),
+    );
 
-    canvas.drawRect(Offset.zero & size, bg);
+    final double mainGlowOpacity = isStopped ? 0.0
+        : isSpeaking   ? 0.18
+        : isListening  ? 0.14
+        : isIdle       ? 0.10
+        : isProcessing ? 0.12
+        : 0.08;
 
-    final double mainGlowOpacity = isStopped
-        ? 0.0
-        : isSpeaking
-            ? 0.18
-            : isListening
-                ? 0.14
-                : isIdle
-                    ? 0.10
-                    : isProcessing
-                        ? 0.12
-                        : 0.08;
-
-    final double mainGlowRadius = isStopped
-        ? 0
-        : isSpeaking
-            ? size.width * 0.62
-            : size.width * 0.52;
+    final double mainGlowRadius = isStopped ? 0
+        : isSpeaking ? size.width * 0.62 : size.width * 0.52;
 
     if (!isStopped) {
-      final centerGlow = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            accent.withOpacity(mainGlowOpacity),
-            accent.withOpacity(mainGlowOpacity * 0.45),
-            Colors.transparent,
-          ],
-        ).createShader(
-          Rect.fromCircle(
-            center: Offset(size.width / 2, size.height * 0.45),
-            radius: mainGlowRadius,
-          ),
-        );
-
       canvas.drawCircle(
         Offset(size.width / 2, size.height * 0.45),
         mainGlowRadius,
-        centerGlow,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              accent.withOpacity(mainGlowOpacity),
+              accent.withOpacity(mainGlowOpacity * 0.45),
+              Colors.transparent,
+            ],
+          ).createShader(Rect.fromCircle(
+            center: Offset(size.width / 2, size.height * 0.45),
+            radius: mainGlowRadius,
+          )),
       );
     }
 
     if (isSpeaking) {
-      final sideGlowLeft = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            Colors.redAccent.withOpacity(0.12),
-            Colors.redAccent.withOpacity(0.04),
-            Colors.transparent,
-          ],
-        ).createShader(
-          Rect.fromCircle(
-            center: Offset(size.width * 0.25, size.height * 0.48),
-            radius: size.width * 0.22,
-          ),
+      for (final xFactor in [0.25, 0.75]) {
+        canvas.drawCircle(
+          Offset(size.width * xFactor, size.height * 0.48),
+          size.width * 0.22,
+          Paint()
+            ..shader = RadialGradient(
+              colors: [
+                Colors.redAccent.withOpacity(0.12),
+                Colors.redAccent.withOpacity(0.04),
+                Colors.transparent,
+              ],
+            ).createShader(Rect.fromCircle(
+              center: Offset(size.width * xFactor, size.height * 0.48),
+              radius: size.width * 0.22,
+            )),
         );
-
-      final sideGlowRight = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            Colors.redAccent.withOpacity(0.12),
-            Colors.redAccent.withOpacity(0.04),
-            Colors.transparent,
-          ],
-        ).createShader(
-          Rect.fromCircle(
-            center: Offset(size.width * 0.75, size.height * 0.48),
-            radius: size.width * 0.22,
-          ),
-        );
-
-      canvas.drawCircle(
-        Offset(size.width * 0.25, size.height * 0.48),
-        size.width * 0.22,
-        sideGlowLeft,
-      );
-      canvas.drawCircle(
-        Offset(size.width * 0.75, size.height * 0.48),
-        size.width * 0.22,
-        sideGlowRight,
-      );
+      }
     }
 
-    final slashOpacity = isStopped
-        ? 0.015
-        : isSpeaking
-            ? 0.04
-            : 0.03;
-
+    final slashOpacity = isStopped ? 0.015 : isSpeaking ? 0.04 : 0.03;
     final slashPaint = Paint()
       ..color = Colors.white.withOpacity(slashOpacity)
       ..strokeWidth = 1.2;
-
     for (int i = -2; i < 8; i++) {
       final startY = size.height * 0.16 + (i * 80);
       canvas.drawLine(
@@ -1372,21 +1147,21 @@ class _NoirBackgroundPainter extends CustomPainter {
       );
     }
 
-    final vignette = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          Colors.transparent,
-          Colors.black.withOpacity(isStopped ? 0.12 : 0.08),
-          Colors.black.withOpacity(isStopped ? 0.58 : 0.42),
-        ],
-        stops: const [0.52, 0.78, 1.0],
-      ).createShader(Offset.zero & size);
-
-    canvas.drawRect(Offset.zero & size, vignette);
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Colors.transparent,
+            Colors.black.withOpacity(isStopped ? 0.12 : 0.08),
+            Colors.black.withOpacity(isStopped ? 0.58 : 0.42),
+          ],
+          stops: const [0.52, 0.78, 1.0],
+        ).createShader(Offset.zero & size),
+    );
   }
 
   @override
-  bool shouldRepaint(covariant _NoirBackgroundPainter oldDelegate) {
-    return oldDelegate.accent != accent || oldDelegate.state != state;
-  }
+  bool shouldRepaint(covariant _NoirBackgroundPainter oldDelegate) =>
+      oldDelegate.accent != accent || oldDelegate.state != state;
 }
