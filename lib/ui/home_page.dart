@@ -7,8 +7,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:nfc_manager/nfc_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:camera/camera.dart';
 
 import '../services/assistant_service.dart';
+import '../services/camera_service.dart';
 import '../services/orientation_service.dart';
 import '../services/tts_service.dart';
 import '../services/vosk_command_service.dart';
@@ -71,6 +73,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   bool _nfcSessionRunning = false;
   bool _nfcUnlocking = false;
+
+  final CameraService _cameraService = CameraService();
 
   Future<void> _lockLandscapeMode() async {
     await SystemChrome.setPreferredOrientations([
@@ -210,6 +214,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         _nfcStatus = 'Impossibile avviare assistente.';
       });
       return;
+    }
+
+    final camStatus = await Permission.camera.request();
+    if (!camStatus.isGranted) {
+      debugPrint('[Camera] Camera permission not granted, continuing without camera');
     }
 
     final available = await NfcManager.instance.isAvailable();
@@ -399,6 +408,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       await _lockLandscapeMode();
       await _controller.start();
 
+      await _cameraService.initialize();
+
       // ① Abilita il gimbal: i dati di orientamento iniziano a fluire
       //    verso l'ESP32 e i servi si assestano sulla posa target.
       await _enableGimbal();
@@ -421,6 +432,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       // ② Disabilita il gimbal prima di fermare il controller:
       //    così i servi vanno in home mentre il TTS è ancora funzionante.
       await _disableGimbal();
+      await _cameraService.dispose();
 
       await _controller.stopAll();
       await _unlockAllOrientations();
@@ -436,6 +448,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Future<void> _restartAssistant() async {
     try {
       await _disableGimbal();
+      await _cameraService.dispose();
       await _controller.stopAll();
       await _unlockAllOrientations();
       await Future.delayed(const Duration(milliseconds: 300));
@@ -518,6 +531,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
 
     _controller.dispose();
+    _cameraService.dispose();
     _orientationService.dispose();
 
     _speakController.dispose();
@@ -576,6 +590,23 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 },
               ),
             ),
+            if (_cameraService.isInitialized && _cameraService.controller != null)
+              Positioned(
+                right: 16,
+                bottom: 16,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: MediaQuery.of(context).size.width * 0.25,
+                    height: MediaQuery.of(context).size.height * 0.25,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: accent.withOpacity(0.4), width: 2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: CameraPreview(_cameraService.controller!),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

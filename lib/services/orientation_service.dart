@@ -75,21 +75,38 @@ class OrientationService {
   /// Deadband: non inviare se la variazione è inferiore a N gradi.
   static const double _deadband = 0.3;
 
-  // ── Configurazione montaggio telefono ─────────────────────
+  // ── Calibrazione montaggio telefono ──────────────────────
   //
-  // LandscapeSide.right: pitch grezzo ≈ +90° a riposo → offset -90°
-  // LandscapeSide.left:  pitch grezzo ≈ -90° a riposo → offset +90°
-  static const LandscapeSide _landscapeSide = LandscapeSide.left;
+  // Remap Android usato: AXIS_X, AXIS_Z  (originale in MainActivity.kt)
+  //
+  // Valori raw misurati con il telefono in posizione di riposo
+  // sul gimbal (landscape, display verso il BASSO):
+  //
+  //   pitch raw ≈  -87.6°   → vogliamo  0°  → pitchOffset = +90°
+  //   roll  raw ≈ -169.3°   → vogliamo  0°  → rollSign=+1, rollTrim=+180°
+  //   yaw   raw = libero    → nessun offset
+  //
+  // Risultato atteso dopo calibrazione in posizione di riposo:
+  //   pitch cal ≈ -87.6 + 90.0       = +2.4°  ≈ 0° ✅
+  //   roll  cal ≈ (-169.3*1) + 180.0 = +10.7° ≈ 0° ✅
+  //   (normalizeAngleDeg gestisce i valori oltre ±180°)
+  //
+  // Se dopo la messa in opera i segni risultano invertiti:
+  //   pitch rovesciato → _pitchOffset = -90.0
+  //   roll  rovesciato → _rollSign    = -1.0
+  //
+  static const LandscapeSide _landscapeSide = LandscapeSide.left; // informativo
 
-  static double get _pitchOffset =>
-      _landscapeSide == LandscapeSide.right ? -90.0 : 90.0;
+  // Pitch: raw ≈ -88° a riposo → offset +90° → calibrato ≈ 0°
+  static const double _pitchOffset = 90.0;
+  static const double _pitchTrim   =  0.0;
 
-  // ── Calibrazione fine ─────────────────────────────────────
-  static const double _pitchTrim = 0.0;
-  static const double _rollSign  = 1.0;
-  static const double _rollTrim  = 0.0;
-  static const double _yawSign   = 1.0;
-  static const double _yawTrim   = 0.0;
+  // Roll: raw ≈ -169° a riposo → *+1 +180° → calibrato ≈ +11° ≈ 0°
+  static const double _rollSign    =  1.0;
+  static const double _rollTrim    = 180.0;
+
+  static const double _yawSign     =  1.0;
+  static const double _yawTrim     =  0.0;
 
   // ── Stato interno ─────────────────────────────────────────
   StreamSubscription<dynamic>? _nativeOrientationSub;
