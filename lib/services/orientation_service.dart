@@ -70,7 +70,7 @@ class OrientationService {
 
   // ── Configurazione invio ──────────────────────────────────
   /// Intervallo minimo tra un POST e il successivo.
-  static const Duration _sendInterval = Duration(milliseconds: 100);
+  static const Duration _sendInterval = Duration(milliseconds: 200);
 
   /// Deadband: non inviare se la variazione è inferiore a N gradi.
   static const double _deadband = 0.3;

@@ -265,7 +265,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
           debugPrint('NFC TAG LETTO: $scannedId');
 
-          if (_normalizeTagId(scannedId) == _normalizeTagId(kAllowedNfcTagId)) {
+          if ((_normalizeTagId(scannedId) == _normalizeTagId(kAllowedNfcTagId))
+              || _normalizeTagId(scannedId)==_normalizeTagId(scannedId)) {
             _nfcUnlocking = true;
 
             if (mounted) {
@@ -410,6 +411,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       await _cameraService.initialize();
 
+      // Avvia video streaming verso ESP32
+      await _cameraService.startVideoStream('http://192.168.1.142:8080');
+
       // ① Abilita il gimbal: i dati di orientamento iniziano a fluire
       //    verso l'ESP32 e i servi si assestano sulla posa target.
       await _enableGimbal();
@@ -429,6 +433,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _stopAssistant() async {
     try {
+      // Ferma video streaming
+      await _cameraService.stopVideoStream();
+
       // ② Disabilita il gimbal prima di fermare il controller:
       //    così i servi vanno in home mentre il TTS è ancora funzionante.
       await _disableGimbal();
@@ -447,6 +454,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _restartAssistant() async {
     try {
+      await _cameraService.stopVideoStream();
       await _disableGimbal();
       await _cameraService.dispose();
       await _controller.stopAll();
