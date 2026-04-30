@@ -24,6 +24,7 @@ class NfcGateService {
   Future<void> startListening({
     required Future<void> Function() onAuthorizedTag,
     Future<void> Function(String scannedId)? onWrongTag,
+    Set<NfcPollingOption>? pollingOptions,
   }) async {
     if (_sessionRunning) return;
 
@@ -37,6 +38,11 @@ class NfcGateService {
     _statusController.add('Avvicina il tag NFC autorizzato...');
 
     await NfcManager.instance.startSession(
+      pollingOptions: pollingOptions ?? {
+        NfcPollingOption.iso14443,
+        NfcPollingOption.iso15693,
+        NfcPollingOption.iso18092,
+      },
       onDiscovered: (NfcTag tag) async {
         try {
           // DEBUG
@@ -77,46 +83,6 @@ class NfcGateService {
     } finally {
       _sessionRunning = false;
     }
-  }
-
-  String? extractTagId(NfcTag tag) {
-    final data = tag.data;
-
-    if (data.containsKey('nfca')) {
-      final nfca = data['nfca'];
-      if (nfca is Map && nfca['identifier'] is List) {
-        return _bytesToHex(List<int>.from(nfca['identifier']));
-      }
-    }
-
-    if (data.containsKey('mifareclassic')) {
-      final mifare = data['mifareclassic'];
-      if (mifare is Map && mifare['identifier'] is List) {
-        return _bytesToHex(List<int>.from(mifare['identifier']));
-      }
-    }
-
-    if (data.containsKey('mifareultralight')) {
-      final ultralight = data['mifareultralight'];
-      if (ultralight is Map && ultralight['identifier'] is List) {
-        return _bytesToHex(List<int>.from(ultralight['identifier']));
-      }
-    }
-
-    if (data.containsKey('ndef')) {
-      final ndef = data['ndef'];
-      if (ndef is Map && ndef['identifier'] is List) {
-        return _bytesToHex(List<int>.from(ndef['identifier']));
-      }
-    }
-
-    return null;
-  }
-
-  String _bytesToHex(List<int> bytes) {
-    return bytes
-        .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
-        .join(':');
   }
 
   String _normalize(String value) {

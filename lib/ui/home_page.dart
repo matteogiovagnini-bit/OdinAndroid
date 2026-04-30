@@ -5,10 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
-import 'package:nfc_manager/nfc_manager.dart';
 
 import '../services/assistant_service.dart';
 import '../services/camera_service.dart';
+import '../services/nfc_gate_service.dart';
 import '../services/orientation_service.dart';
 import '../services/tts_service.dart';
 import '../services/vosk_command_service.dart';
@@ -17,7 +17,6 @@ import '../services/voice_assistant_controller.dart';
 import '../widgets/animated_eyes.dart';
 
 const bool kUseVisualAvatarUi = true;
-const bool kUseDiabolikStyle = false;
 
 const String kAllowedNfcTagId = '04:73:6C:7A:9A:3D:80';
 const String kEsp32BaseUrl = 'http://jarvis';
@@ -62,8 +61,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   final CameraService _cameraService = CameraService();
 
-  bool _nfcSessionRunning = false;
-  bool _nfcUnlocking = false;
+  late final NfcGateService _nfcGateService;
+  StreamSubscription<String>? _nfcStatusSub;
 
   @override
   void initState() {
@@ -91,6 +90,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     OrientationService.setBaseUrl(kEsp32BaseUrl);
     _orientationService = OrientationService();
+    _orientationService.start();
+
+    _nfcGateService = NfcGateService(allowedTagId: kAllowedNfcTagId);
+    _nfcStatusSub = _nfcGateService.statusStream.listen((status) {
+      if (!mounted) return;
+      setState(() => _nfcStatus = status);
+    });
 
     _statusSub = _controller.statusStream.listen((value) {
       if (!mounted) return;
@@ -197,7 +203,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       await _controller.stopAll();
     } catch (_) {}
 
-    await _stopNfcSession();
+    await _nfcGateService.stopListening();
 
     if (!mounted) return;
     setState(() {
@@ -223,7 +229,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       debugPrint('[Camera] Camera permission not granted, continuing without camera');
     }
 
-    final available = await NfcManager.instance.isAvailable();
+    final available = await _nfcGateService.isAvailable();
     if (!available) {
       if (!mounted) return;
       setState(() {
@@ -236,82 +242,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     if (!mounted) return;
     setState(() => _nfcStatus = 'Avvicina il tag NFC autorizzato');
 
-    await _startNfcSession();
-  }
-
-  Future<void> _startNfcSession() async {
-    if (_nfcSessionRunning) return;
-    _nfcSessionRunning = true;
-    _nfcUnlocking = false;
-
-    await NfcManager.instance.startSession(
-      pollingOptions: {
-        NfcPollingOption.iso14443,
-        NfcPollingOption.iso15693,
-        NfcPollingOption.iso18092,
-      },
-      onDiscovered: (NfcTag tag) async {
-        if (_nfcUnlocking) return;
-
-        try {
-          //final scannedId = _extractTagId(tag);
-          final scannedId = kAllowedNfcTagId;
-          if (scannedId == null || scannedId.isEmpty) {
-            if (!mounted) return;
-            setState(() {
-              _nfcStatus = 'Tag NFC non riconosciuto';
-            });
-            return;
-          }
-
-          debugPrint('[NFC] Tag letto: $scannedId');
-
-          if (scannedId.toUpperCase() == kAllowedNfcTagId.toUpperCase()) {
-            _nfcUnlocking = true;
-            await _stopNfcSession();
-            if (!mounted) return;
-            setState(() {
-              _nfcStatus = 'Tag autorizzato! Avvio assistente...';
-            });
-            await _startAssistant();
-          } else {
-            if (!mounted) return;
-            setState(() {
-              _nfcStatus = 'Tag non autorizzato: $scannedId';
-            });
-          }
-        } catch (e) {
-          debugPrint('[NFC] Errore: $e');
-        }
+    await _nfcGateService.startListening(
+      onAuthorizedTag: _startAssistant,
+      onWrongTag: (scannedId) async {
+        if (!mounted) return;
+        setState(() {
+          _nfcStatus = 'Tag non autorizzato: $scannedId';
+        });
       },
     );
-  }
-
-  String? _extractTagId(NfcTag tag) {
-    try {
-      if (tag.data is Map) {
-        final data = tag.data as Map;
-        if (data.containsKey('nfca')) {
-          final nfca = data['nfca'];
-          if (nfca != null && nfca is Map && nfca.containsKey('identifier')) {
-            final id = nfca['identifier'];
-            if (id is List) {
-              return id.map((e) => e.toRadixString(16).padLeft(2, '0')).join(':').toUpperCase();
-            }
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('[NFC] Errore estrazione tag: $e');
-    }
-    return null;
-  }
-
-  Future<void> _stopNfcSession() async {
-    try {
-      await NfcManager.instance.stopSession();
-    } catch (_) {}
-    _nfcSessionRunning = false;
   }
 
   // ── Start Assistant ───────────────────────────────────────────
@@ -335,7 +274,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       try {
         await _cameraService.initialize();
-        await _cameraService.startVideoStream('\$kEsp32BaseUrl/frame');
+        await _cameraService.startVideoStream('${kEsp32BaseUrl}/frame');
       } catch (e) {
         debugPrint('[Camera] Errore: $e');
       }
@@ -616,7 +555,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _finalSub?.cancel();
     _stateSub?.cancel();
     _orientationSub?.cancel();
-    _stopNfcSession();
+    _nfcStatusSub?.cancel();
+    _nfcGateService.dispose();
     _orientationService.dispose();
     _controller.dispose();
     _speakController.dispose();
