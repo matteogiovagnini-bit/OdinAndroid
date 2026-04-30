@@ -19,8 +19,13 @@ import '../widgets/animated_eyes.dart';
 const bool kUseVisualAvatarUi = true;
 const bool kUseDiabolikStyle = false;
 
+// ── NFC ──────────────────────────────────────────────────
 const String kAllowedNfcTagId = '04:73:6C:7A:9A:3D:80';
+
+// ── Odin Home: indirizzo Raspberry Pi ───────────────────────────
 const String kEsp32BaseUrl = 'http://jarvis';
+
+// ── Gimbal: target di posa iniziale ──────────────────────────
 const double kGimbalTargetPitch = -8.0;
 const double kGimbalTargetRoll  =  0.0;
 
@@ -190,7 +195,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   double get _currentRoll => _roll - _calibratedRoll;
   double get _currentYaw => _yaw - _calibratedYaw;
 
-  // ── NFC Gate ──────────────────────────────────────
+  // ── NFC Gate ──────────────────────────────────────────────
 
   Future<void> _startNfcGateMode() async {
     try {
@@ -254,12 +259,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         if (_nfcUnlocking) return;
 
         try {
-          //final scannedId = _extractTagId(tag);
+          // DEBUG
           final scannedId = kAllowedNfcTagId;
+          //final scannedId = extractTagId(tag);
+          // FINE DEBUG
+
           if (scannedId == null || scannedId.isEmpty) {
             if (!mounted) return;
             setState(() {
-              _nfcStatus = 'Tag NFC non riconosciuto';
+              _nfcStatus = 'Tag NFC non riconosciuto/vuoto';
             });
             return;
           }
@@ -322,23 +330,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         _status = 'Avvio assistente...';
       });
 
-      await SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-
       await _controller.start();
 
       _cameraService.setObjectDetectorCallback((objects) {
         debugPrint('[Vision] Rilevato: $objects');
       });
 
-      try {
-        await _cameraService.initialize();
-        await _cameraService.startVideoStream('\$kEsp32BaseUrl/frame');
-      } catch (e) {
-        debugPrint('[Camera] Errore: $e');
-      }
+      await _cameraService.startVideoStream('\$kEsp32BaseUrl/frame');
 
       try {
         await _orientationService.gimbalEnable(true);
@@ -346,6 +344,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       } catch (e) {
         debugPrint('[Gimbal] Errore: $e');
       }
+
+      await _controller.ttsService.speak('Sistema attivato');
+    } catch (e, st) {
+      debugPrint('ERRORE AVVIO ASSISTENTE: $e');
+      debugPrintStack(stackTrace: st);
+      if (!mounted) return;
+      setState(() {
+        _assistantState = AssistantState.stopped;
+        _status = 'Errore avvio assistente: $e';
+      });
+    }
+  }
 
       await _controller.ttsService.speak('Sistema attivato');
     } catch (e, st) {
@@ -419,15 +429,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 },
               ),
             ),
-            if (_cameraService.isInitialized &&
-                _cameraService.controller != null &&
+            if (_cameraService.isInitialized && 
+                _cameraService.controller != null && 
                 _cameraService.controller!.value.isInitialized)
               Positioned(
                 right: 16,
                 bottom: 16,
                 child: Container(
-                  width: MediaQuery.of(context).size.width * 1 / 4,
-                  height: MediaQuery.of(context).size.height * 1 / 4,
+                  width: MediaQuery.of(context).size.width * 1 / 6,
+                  height: MediaQuery.of(context).size.height * 1 / 6,
                   decoration: BoxDecoration(
                     border: Border.all(color: accent.withValues(alpha: 0.4), width: 2),
                     borderRadius: BorderRadius.circular(12),
@@ -440,8 +450,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 right: 16,
                 bottom: 16,
                 child: Container(
-                  width: MediaQuery.of(context).size.width * 1 / 4,
-                  height: MediaQuery.of(context).size.height * 1 / 4,
+                  width: MediaQuery.of(context).size.width * 1 / 6,
+                  height: MediaQuery.of(context).size.height * 1 / 6,
                   decoration: BoxDecoration(
                     color: Colors.grey.withValues(alpha: 0.3),
                     border: Border.all(color: accent.withValues(alpha: 0.4), width: 2),
@@ -500,16 +510,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 child: Column(
                   children: [
                     AnimatedContainer(
-                      duration: const Duration(milliseconds: 250),
-                      width: 96,
-                      height: 96,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: color.withValues(alpha: 0.15),
-                        border: Border.all(color: color.withValues(alpha: 0.35), width: 2),
-                      ),
-                      child: Icon(_stateIcon(), size: 44, color: color),
-                    ),
+                        duration: const Duration(milliseconds: 250),
+                        width: 96,
+                        height: 96,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: color.withValues(alpha: 0.15),
+                          border: Border.all(color: color.withValues(alpha: 0.35), width: 2),
+                        ),
+                        child: Icon(_stateIcon(), size: 44, color: color)),
                     const SizedBox(height: 16),
                     Text(
                       _stateLabel(),
@@ -597,7 +606,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   String _stateHint() {
     switch (_assistantState) {
       case AssistantState.idleWakeWord:
-        return 'Dici "Ehi Odin" per attivare';
+        return 'Di "Ehi Odin" per attivare';
       case AssistantState.listeningCommand:
         return 'Pronuncia un comando';
       case AssistantState.processing:

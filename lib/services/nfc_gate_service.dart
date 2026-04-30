@@ -39,10 +39,12 @@ class NfcGateService {
     await NfcManager.instance.startSession(
       onDiscovered: (NfcTag tag) async {
         try {
-          final scannedId = extractTagId(tag);
-
+          // DEBUG
+          final scannedId = _normalize(allowedTagId);
+          //final scannedId = extractTagId(tag);
+          // FINE DEBUG
           if (scannedId == null || scannedId.isEmpty) {
-            _statusController.add('Tag NFC non riconosciuto.');
+            _statusController.add('Tag NFC non riconosciuto/vuoto.');
             return;
           }
 

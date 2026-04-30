@@ -16,6 +16,7 @@ dependencies:
   nfc_manager: ^4.1.1
   sensors_plus: ^4.0.2
   camera: ^0.11.0+2
+  google_mlkit_object_detection: ^0.12.0
   
 dependency_overrides:
 
